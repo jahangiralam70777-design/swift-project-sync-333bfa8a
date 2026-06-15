@@ -79,6 +79,10 @@ import {
   type McqDashboardStats,
 } from "@/lib/admin-mcq.functions";
 import { confirmDialog } from "@/components/ui/confirm-imperative";
+import {
+  fingerprintQuestion as fingerprintSharedQuestion,
+  parseMcqText as parseSharedMcqText,
+} from "@/lib/mcq-parse";
 
 // pdfjs worker is configured lazily inside extractFileText() on first PDF parse.
 
@@ -1901,145 +1905,39 @@ async function extractFileText(file: File) {
   throw new Error(`Unsupported file format: ${file.name}`);
 }
 
-/**
- * Tolerant MCQ parser. Handles:
- *  - Question lead-ins: "Question:", "Q1.", "1.", "1)", or none
- *  - Options: "A.", "A)", "A:", "a)", "(A)" — case-insensitive
- *  - Answer: "Answer: B", "Ans: b", "Correct: B", "Correct Answer - B"
- *  - Explanation: "Explanation:", "Reason:", "Solution:" (multi-line until next question)
- */
 function parseMcqText(raw: string, source: string): ParsedImportRow[] {
-  const text = raw.replace(/\r\n?/g, "\n").trim();
-  if (!text) return [];
-
-  // Split into question blocks. New block starts at numbered/Q-prefixed line or "Question:" lead-in.
-  const lines = text.split("\n");
-  const blocks: string[] = [];
-  let current: string[] = [];
-  const isQuestionStart = (line: string) =>
-    /^\s*(?:Q(?:uestion)?\s*\.?\s*)?\d{1,3}[).:-]\s+\S/.test(line) ||
-    /^\s*Question\s*[:.-]/i.test(line);
-
-  for (const line of lines) {
-    if (isQuestionStart(line) && current.length) {
-      blocks.push(current.join("\n"));
-      current = [line];
-    } else {
-      current.push(line);
-    }
-  }
-  if (current.length) blocks.push(current.join("\n"));
-
-  // Fallback: no numbering at all — treat whole text as one block, or split on blank lines if multiple A. markers
-  let working = blocks.length > 1 ? blocks : [text];
-  if (working.length === 1 && (text.match(/(?:^|\n)\s*\(?A\)?[).:]/gi)?.length ?? 0) > 1) {
-    working = text
-      .split(/\n\s*\n+/)
-      .map((b) => b.trim())
-      .filter(Boolean);
-  }
-
-  const out: ParsedImportRow[] = [];
-  for (const block of working) {
-    const row = parseSingleBlock(block, source);
-    if (row) out.push(row);
-  }
-  return out;
-}
-
-function parseSingleBlock(block: string, source: string): ParsedImportRow | null {
-  const stripped = block
-    .replace(/^\s*Question\s*[:.-]\s*/i, "")
-    .replace(/^\s*Q(?:uestion)?\s*\.?\s*\d{1,3}[).:-]?\s*/i, "")
-    .replace(/^\s*\d{1,3}[).:-]\s*/i, "")
-    .trim();
-
-  // True/False detection: leading TF: marker
-  const tfHead = stripped.match(/^\s*(?:TF|TRUE[_\s/-]?FALSE|T\/F)\s*[:.\-)]\s*([\s\S]+)$/i);
-  if (tfHead) {
-    const body = tfHead[1];
-    const ansM = body.match(/(?:^|\n)\s*(?:Answer|Ans|Correct)\s*[:.\-)]\s*([A-Za-z]+)/i);
-    const expM = body.match(/(?:^|\n)\s*(?:Explanation|Reason|Solution)\s*[:.\-)]\s*([\s\S]*)$/i);
-    if (!ansM) return null;
-    const cuts = [ansM.index, expM?.index].filter((x): x is number => typeof x === "number");
-    const q = cleanText(body.slice(0, Math.min(...cuts, body.length)));
-    const a = ansM[1].toLowerCase().replace(/[^a-z]/g, "");
-    const correct: "A" | "B" = a === "true" || a === "t" || a === "a" ? "A" : "B";
-    return {
+  const parsed = parseSharedMcqText(raw);
+  return [
+    ...parsed.cards.map((row) => ({
       source,
-      question: q,
-      question_type: "true_false",
-      option_a: "True",
-      option_b: "False",
+      question: row.question,
+      question_type: row.question_type,
+      option_a: row.option_a,
+      option_b: row.option_b,
+      option_c: row.question_type === "true_false" ? null : row.option_c,
+      option_d: row.question_type === "true_false" ? null : row.option_d,
+      correct_option: row.correct_option,
+      explanation: row.explanation || null,
+      difficulty: "medium" as const,
+      status: "published" as const,
+      tags: [],
+    })),
+    ...parsed.invalidBlocks.map((block) => ({
+      source,
+      question: block.raw,
+      question_type: "mcq" as const,
+      option_a: "",
+      option_b: "",
       option_c: null,
       option_d: null,
-      correct_option: correct,
-      explanation: expM?.[1]?.trim() || null,
-      difficulty: "medium",
-      status: "published",
+      correct_option: "A" as const,
+      explanation: null,
+      difficulty: "medium" as const,
+      status: "published" as const,
       tags: [],
-    };
-  }
-
-  // Find option markers — accept A./A)/A:/(A)/a)
-  const optRe = /(^|\n)[ \t]*\(?([A-Da-d])\)?[ \t]*[).:.-][ \t]*/g;
-  const markers: { letter: "A" | "B" | "C" | "D"; index: number; matchLen: number }[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = optRe.exec(stripped)) !== null) {
-    const letter = m[2].toUpperCase() as "A" | "B" | "C" | "D";
-    const start = m.index + m[1].length;
-    markers.push({ letter, index: start, matchLen: m[0].length - m[1].length });
-  }
-  if (markers.length < 4) return null;
-
-  const firstOf = (l: "A" | "B" | "C" | "D") => markers.find((x) => x.letter === l);
-  const mA = firstOf("A"),
-    mB = firstOf("B"),
-    mC = firstOf("C"),
-    mD = firstOf("D");
-  if (!mA || !mB || !mC || !mD) return null;
-
-  const question = stripped.slice(0, mA.index).trim();
-
-  const afterD = stripped.slice(mD.index + mD.matchLen);
-  const ansRe =
-    /\n?\s*(?:Answer|Ans|Correct(?:\s*Answer)?|Correct\s*Option)\s*[:.-]?\s*\(?([A-Da-d])\)?/i;
-  const expRe = /\n?\s*(?:Explanation|Reason|Solution)\s*[:.-]\s*([\s\S]*)$/i;
-  const ansMatch = ansRe.exec(afterD);
-  const expMatch = expRe.exec(afterD);
-  const cuts = [ansMatch?.index, expMatch?.index].filter((x): x is number => typeof x === "number");
-  const cut = cuts.length ? Math.min(...cuts) : afterD.length;
-  const optionD = afterD.slice(0, cut).trim();
-
-  const between = (a: typeof mA, b: typeof mA) =>
-    stripped.slice(a.index + a.matchLen, b.index).trim();
-
-  const answer = (ansMatch?.[1]?.toUpperCase() ?? "A") as "A" | "B" | "C" | "D";
-  const explanation = expMatch?.[1]?.trim() || null;
-  const cleanOpt = (s: string) =>
-    s
-      .replace(/^[\s).:.-]+/, "")
-      .replace(/[\s.]+$/, "")
-      .trim();
-
-  return {
-    source,
-    question: cleanText(question),
-    question_type: "mcq",
-    option_a: cleanOpt(between(mA, mB)),
-    option_b: cleanOpt(between(mB, mC)),
-    option_c: cleanOpt(between(mC, mD)),
-    option_d: cleanOpt(optionD),
-    correct_option: answer,
-    explanation,
-    difficulty: "medium",
-    status: "published",
-    tags: [],
-  };
-}
-
-function cleanText(s: string) {
-  return s.replace(/\s+/g, " ").trim();
+      error: block.reason,
+    })),
+  ];
 }
 
 function dedupe(parsed: ParsedImportRow[], existing: string[]): ParsedImportRow[] {
@@ -2053,10 +1951,7 @@ function dedupe(parsed: ParsedImportRow[], existing: string[]): ParsedImportRow[
 }
 
 function normalizeQuestion(question: string) {
-  return question
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+  return fingerprintSharedQuestion(question);
 }
 
 function validateImportRow(row: BulkImportItem) {
