@@ -1208,6 +1208,14 @@ const bulkMockItem = z.object({
   option_d: z.string().trim().max(1000).nullable().optional(),
   correct_option: z.enum(["A", "B", "C", "D"]),
   explanation: z.string().trim().max(4000).nullable().optional(),
+}).superRefine((v, ctx) => {
+  if (v.question_type === "true_false") {
+    if (!["A", "B"].includes(v.correct_option)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "True/False correct_option must be A or B" });
+    }
+  } else if (!v.option_c || !v.option_c.trim() || !v.option_d || !v.option_d.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "MCQ requires all four options" });
+  }
 });
 
 const bulkMockInput = z.object({
@@ -1224,7 +1232,7 @@ const bulkMockInput = z.object({
   randomize_options: z.boolean().default(false),
   negative_marking: z.number().min(0).max(5).default(0),
   passing_marks: z.number().int().min(0).max(1000).default(0),
-  items: z.array(bulkMockItem).min(1).max(200),
+  items: z.array(bulkMockItem).min(1).max(500),
   // For chunked uploads: when provided, append items to an existing mock instead
   // of creating a new one. Lets the client stream large imports in batches.
   append_to_quiz_id: z.string().uuid().nullable().optional(),

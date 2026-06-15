@@ -139,12 +139,28 @@ export function BulkUploadMockDialog({
     );
   }, [existingQ.data, rows.length]);
 
-  const handleParse = (text: string) => {
+  const parseInput = (text: string, notify = false) => {
     const { cards, invalidBlocks } = parseMcqText(text);
     setRows(cards.map((c) => ({ ...c })));
     setErrors(invalidBlocks);
-    if (cards.length === 0) toast.error("No MCQs detected. Check the format.");
-    else toast.success(`Parsed ${cards.length} MCQ${cards.length > 1 ? "s" : ""}`);
+    if (notify) {
+      if (cards.length === 0) toast.error("No MCQs detected. Check the format.");
+      else toast.success(`Parsed ${cards.length} MCQ${cards.length > 1 ? "s" : ""}`);
+    }
+  };
+
+  useEffect(() => {
+    if (!rawText.trim()) {
+      setRows([]);
+      setErrors([]);
+      return;
+    }
+    const timer = window.setTimeout(() => parseInput(rawText), 200);
+    return () => window.clearTimeout(timer);
+  }, [rawText]);
+
+  const handleParse = (text: string) => {
+    parseInput(text, true);
   };
 
   const onFile = async (file: File) => {
