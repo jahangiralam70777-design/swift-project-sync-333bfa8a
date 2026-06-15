@@ -1224,7 +1224,10 @@ const bulkMockInput = z.object({
   randomize_options: z.boolean().default(false),
   negative_marking: z.number().min(0).max(5).default(0),
   passing_marks: z.number().int().min(0).max(1000).default(0),
-  items: z.array(bulkMockItem).min(1).max(500),
+  items: z.array(bulkMockItem).min(1).max(200),
+  // For chunked uploads: when provided, append items to an existing mock instead
+  // of creating a new one. Lets the client stream large imports in batches.
+  append_to_quiz_id: z.string().uuid().nullable().optional(),
 });
 
 export const adminBulkImportMock = createServerFn({ method: "POST" })
@@ -1234,8 +1237,6 @@ export const adminBulkImportMock = createServerFn({ method: "POST" })
     await assertPermission(context.supabase, context.userId, "manage_content");
     const sb = context.supabase;
 
-    // Resolve chapters: a single chapter when provided, otherwise all chapters
-    // under the subject (round-robin assignment for the MCQ bank).
     let chapterIds: string[] = [];
     if (data.chapter_id) {
       chapterIds = [data.chapter_id];
@@ -1252,8 +1253,46 @@ export const adminBulkImportMock = createServerFn({ method: "POST" })
         throw new Error("Selected subject has no chapters. Create a chapter first.");
     }
 
+    // Resolve target quiz: create new on first batch, or reuse existing one.
+    let quizId: string;
+    let startPosition = 0;
+    if (data.append_to_quiz_id) {
+      quizId = data.append_to_quiz_id;
+      const { count, error: cntErr } = await sb
+        .from("quiz_questions")
+        .select("mcq_id", { count: "exact", head: true })
+        .eq("quiz_id", quizId);
+      if (cntErr) throw cntErr;
+      startPosition = count ?? 0;
+    } else {
+      const { data: quiz, error: qErr } = await sb
+        .from("quizzes")
+        .insert({
+          title: data.title,
+          description: data.description ?? null,
+          level: data.level,
+          subject_id: data.subject_id ?? null,
+          chapter_id: data.chapter_id ?? null,
+          duration_seconds: data.duration_seconds,
+          total_questions: 0,
+          difficulty: data.difficulty,
+          status: data.status,
+          is_public: data.is_public,
+          randomize_questions: data.randomize_questions,
+          randomize_options: data.randomize_options,
+          negative_marking: data.negative_marking,
+          passing_marks: data.passing_marks,
+          kind: "mock",
+          created_by: context.userId,
+        })
+        .select("id")
+        .single();
+      if (qErr) throw qErr;
+      quizId = (quiz as { id: string }).id;
+    }
+
     const mcqRows = data.items.map((it, i) => ({
-      chapter_id: chapterIds[i % chapterIds.length],
+      chapter_id: chapterIds[(startPosition + i) % chapterIds.length],
       question: it.question,
       question_type: it.question_type,
       option_a: it.option_a,
@@ -1276,37 +1315,17 @@ export const adminBulkImportMock = createServerFn({ method: "POST" })
     const mcqIds = (insertedMcqs ?? []).map((r: { id: string }) => r.id);
     if (!mcqIds.length) throw new Error("No MCQs were inserted");
 
-    const { data: quiz, error: qErr } = await sb
-      .from("quizzes")
-      .insert({
-        title: data.title,
-        description: data.description ?? null,
-        level: data.level,
-        subject_id: data.subject_id ?? null,
-        chapter_id: data.chapter_id ?? null,
-        duration_seconds: data.duration_seconds,
-        total_questions: mcqIds.length,
-        difficulty: data.difficulty,
-        status: data.status,
-        is_public: data.is_public,
-        randomize_questions: data.randomize_questions,
-        randomize_options: data.randomize_options,
-        negative_marking: data.negative_marking,
-        passing_marks: data.passing_marks,
-        kind: "mock",
-        created_by: context.userId,
-      })
-      .select("id")
-      .single();
-    if (qErr) throw qErr;
-
     const links = mcqIds.map((mcq_id, i) => ({
-      quiz_id: (quiz as { id: string }).id,
+      quiz_id: quizId,
       mcq_id,
-      position: i,
+      position: startPosition + i,
     }));
     const { error: linkErr } = await sb.from("quiz_questions").insert(links);
     if (linkErr) throw linkErr;
 
-    return { mock_id: (quiz as { id: string }).id, inserted: mcqIds.length };
+    const newTotal = startPosition + mcqIds.length;
+    await sb.from("quizzes").update({ total_questions: newTotal }).eq("id", quizId);
+
+    return { mock_id: quizId, inserted: mcqIds.length, total: newTotal };
   });
+

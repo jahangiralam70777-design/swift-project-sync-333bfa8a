@@ -175,35 +175,47 @@ export function BulkUploadMockDialog({
         throw new Error("Pick a subject to use All Chapters");
       if (!title.trim()) throw new Error("Give the mock test a title");
       if (!validRows.length) throw new Error("No MCQs to import");
+
+      const BATCH = 100;
       setProgress({ done: 0, total: validRows.length });
-      const res = await importFn({
-        data: {
-          chapter_id: chapterId === "__all__" ? null : chapterId,
-          title: title.trim(),
-          level: (level || "professional") as string,
-          subject_id: subjectId || null,
-          duration_seconds: Math.max(60, Math.round(durationMin * 60)),
-          difficulty: "medium",
-          status: "draft",
-          is_public: true,
-          randomize_questions: true,
-          randomize_options: false,
-          negative_marking: 0,
-          passing_marks: 0,
-          items: validRows.map((r) => ({
-            question: r.question,
-            question_type: r.question_type,
-            option_a: r.option_a,
-            option_b: r.option_b,
-            option_c: r.question_type === "true_false" ? null : r.option_c,
-            option_d: r.question_type === "true_false" ? null : r.option_d,
-            correct_option: r.correct_option,
-            explanation: r.explanation || null,
-          })),
-        },
-      });
-      setProgress({ done: res.inserted, total: validRows.length });
-      return res;
+      let mockId: string | null = null;
+      let done = 0;
+
+      for (let i = 0; i < validRows.length; i += BATCH) {
+        const slice = validRows.slice(i, i + BATCH);
+        const items = slice.map((r) => ({
+          question: r.question,
+          question_type: r.question_type,
+          option_a: r.option_a,
+          option_b: r.option_b,
+          option_c: r.question_type === "true_false" ? null : r.option_c,
+          option_d: r.question_type === "true_false" ? null : r.option_d,
+          correct_option: r.correct_option,
+          explanation: r.explanation || null,
+        }));
+        const res = await importFn({
+          data: {
+            chapter_id: chapterId === "__all__" ? null : chapterId,
+            title: title.trim(),
+            level: (level || "professional") as string,
+            subject_id: subjectId || null,
+            duration_seconds: Math.max(60, Math.round(durationMin * 60)),
+            difficulty: "medium",
+            status: "draft",
+            is_public: true,
+            randomize_questions: true,
+            randomize_options: false,
+            negative_marking: 0,
+            passing_marks: 0,
+            items,
+            append_to_quiz_id: mockId,
+          },
+        });
+        mockId = res.mock_id;
+        done += res.inserted;
+        setProgress({ done, total: validRows.length });
+      }
+      return { mock_id: mockId!, inserted: done };
     },
 
     onSuccess: (res) => {
@@ -221,6 +233,7 @@ export function BulkUploadMockDialog({
       setProgress(null);
     },
   });
+
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
