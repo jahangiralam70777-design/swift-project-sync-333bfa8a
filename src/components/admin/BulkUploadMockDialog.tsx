@@ -170,13 +170,15 @@ export function BulkUploadMockDialog({
 
   const importM = useMutation({
     mutationFn: async () => {
-      if (!chapterId) throw new Error("Pick a chapter first");
+      if (!chapterId) throw new Error("Pick a chapter (or All Chapters) first");
+      if (chapterId === "__all__" && !subjectId)
+        throw new Error("Pick a subject to use All Chapters");
       if (!title.trim()) throw new Error("Give the mock test a title");
       if (!validRows.length) throw new Error("No MCQs to import");
       setProgress({ done: 0, total: validRows.length });
       const res = await importFn({
         data: {
-          chapter_id: chapterId,
+          chapter_id: chapterId === "__all__" ? null : chapterId,
           title: title.trim(),
           level: (level || "professional") as string,
           subject_id: subjectId || null,
@@ -203,6 +205,7 @@ export function BulkUploadMockDialog({
       setProgress({ done: res.inserted, total: validRows.length });
       return res;
     },
+
     onSuccess: (res) => {
       toast.success(`Mock created with ${res.inserted} questions`);
       qc.invalidateQueries({ queryKey: ["admin-mocks"] });
