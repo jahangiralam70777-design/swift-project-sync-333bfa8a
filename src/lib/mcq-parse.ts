@@ -66,7 +66,7 @@ function looksLikeCompleteMcqBlock(block: string): boolean {
 function parseBlock(raw: string): { mcq: ParsedMcq | null; reason?: string } {
   const stripped = raw
     .replace(/\r\n?/g, "\n")
-    .replace(/^\s*Question\s*[:.\-)]\s*/i, "")
+    .replace(/^\s*(?:q|question)\s*[:.\-)]\s*/i, "")
     .replace(/^\s*Q(?:uestion)?\s*\.?\s*\d{1,4}[).:\-]?\s*/i, "")
     .replace(/^\s*\d{1,4}[).:\-]\s*/i, "")
     .trim();
