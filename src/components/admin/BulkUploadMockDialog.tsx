@@ -208,6 +208,9 @@ export function BulkUploadMockDialog({
           option_d: r.question_type === "true_false" ? null : r.option_d,
           correct_option: r.correct_option,
           explanation: r.explanation || null,
+          difficulty: "medium" as const,
+          status: "published" as const,
+          tags: [],
         }));
         const res = await importFn({
           data: {
