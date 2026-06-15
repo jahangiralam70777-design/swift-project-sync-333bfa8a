@@ -1611,6 +1611,16 @@ export function MockTestManagerFlow() {
           <MockCardDrawer cardKey={openCard} open={!!openCard} onClose={() => setOpenCard(null)} />
         </Suspense>
       )}
+
+      {showBulkUpload && (
+        <BulkUploadMockDialog
+          onClose={() => setShowBulkUpload(false)}
+          onImported={() => {
+            qc.invalidateQueries({ queryKey: ["admin-mocks"] });
+            qc.invalidateQueries({ queryKey: ["admin-mock-stats"] });
+          }}
+        />
+      )}
     </div>
   );
 }
