@@ -7,6 +7,7 @@ import {
   RATE_LIMITS,
   rateLimitKey,
 } from "@/integrations/security/rate-limit";
+import { mcqBulkImportItemSchema } from "@/lib/mcq-bulk-schema";
 
 // ---------- Shared schemas ----------
 const optionStr = z.string().trim().min(1).max(1000);
@@ -773,10 +774,7 @@ const bulkInput = z.object({
       status: statusEnum.optional(),
     })
     .optional(),
-  items: z
-    .array(mcqInputBase.omit({ chapter_id: true }).superRefine(refineMcq))
-    .min(1)
-    .max(500),
+  items: z.array(mcqBulkImportItemSchema).min(1).max(500),
 });
 
 export const adminBulkImportMcqs = createServerFn({ method: "POST" })

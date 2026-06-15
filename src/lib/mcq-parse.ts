@@ -1,19 +1,6 @@
-// Parse MCQ blocks from raw text into a structured form.
-// Supported per-block shape (flexible whitespace + labels):
-//   Q: What is audit?
-//   A. Option A
-//   B. Option B
-//   C. Option C
-//   D. Option D
-//   Answer: B
-//   Explanation: ...
-//
-// Accepted variants:
-//   - "Q:", "Q.", "Q)", "Question:", "1.", "1)" for the question line
-//   - "A.", "A)", "(A)", "a." for options
-//   - "Answer:", "Ans:", "Correct:" for the answer (letter A-D or full option text)
-//   - "Explanation:", "Explain:", "Solution:" for the explanation
-//   - Blocks separated by blank lines or detected by a new Q-line
+// Single source of truth for MCQ bulk-upload parsing.
+// MCQ Practice and Mock Import must both call this parser so identical text
+// always produces identical structured question rows.
 
 export type ParsedMcq = {
   question: string;
@@ -33,56 +20,67 @@ export type ParsedMcqResult = {
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 
-function splitBlocks(text: string): string[] {
-  const t = text.replace(/\r\n?/g, "\n").trim();
-  if (!t) return [];
-  // Split on blank lines first; if that produces only 1 block, also split on the
-  // next "Q:"/numbered question marker.
-  const byBlank = t
+const QUESTION_START_RE =
+  /^\s*(?:(?:q(?:uestion)?\s*\.?\s*)?\d{1,4}[).:\-]\s+\S|(?:q|question)\s*[:.)\-]\s+\S|(?:tf|true[_\s/-]?false|t\/f)\s*[:.)\-]\s+\S)/i;
+
+function splitBlocks(input: string): string[] {
+  const text = input.replace(/\r\n?/g, "\n").trim();
+  if (!text) return [];
+
+  const lines = text.split("\n");
+  const blocks: string[] = [];
+  let current: string[] = [];
+
+  for (const line of lines) {
+    if (QUESTION_START_RE.test(line) && current.some((l) => l.trim())) {
+      blocks.push(current.join("\n").trim());
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.some((l) => l.trim())) blocks.push(current.join("\n").trim());
+
+  if (blocks.length > 1) return blocks.filter(Boolean);
+
+  const paragraphs = text
     .split(/\n\s*\n+/)
     .map((b) => b.trim())
     .filter(Boolean);
-  if (byBlank.length > 1) return byBlank;
-  const re = /(?=^\s*(?:q\s*[:.\)\-]|question\s*[:.\)\-]|\d+\s*[.\)]))/gim;
-  return t
-    .split(re)
-    .map((b) => b.trim())
-    .filter(Boolean);
+  const completeParagraphs = paragraphs.filter(looksLikeCompleteMcqBlock);
+  if (paragraphs.length > 1 && completeParagraphs.length === paragraphs.length) return paragraphs;
+
+  return [text];
+}
+
+function looksLikeCompleteMcqBlock(block: string): boolean {
+  return (
+    /(^|\n)\s*\(?A\)?\s*[).:\-]/i.test(block) &&
+    /(^|\n)\s*\(?B\)?\s*[).:\-]/i.test(block) &&
+    /(^|\n)\s*\(?C\)?\s*[).:\-]/i.test(block) &&
+    /(^|\n)\s*\(?D\)?\s*[).:\-]/i.test(block) &&
+    /(^|\n)\s*(?:answer|ans|correct(?:\s+answer)?|correct\s+option)\s*[:.\-)]/i.test(block)
+  );
 }
 
 function parseBlock(raw: string): { mcq: ParsedMcq | null; reason?: string } {
-  const lines = raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (lines.length < 2) return { mcq: null, reason: "Too few lines for a question" };
+  const stripped = raw
+    .replace(/\r\n?/g, "\n")
+    .replace(/^\s*(?:q|question)\s*[:.\-)]\s*/i, "")
+    .replace(/^\s*Q(?:uestion)?\s*\.?\s*\d{1,4}[).:\-]?\s*/i, "")
+    .replace(/^\s*\d{1,4}[).:\-]\s*/i, "")
+    .trim();
+  if (!stripped) return { mcq: null, reason: "Empty question block" };
 
-  // True/False detection: leading marker like "TF:", "TRUE_FALSE:", "T/F:"
-  const tfHead = lines[0].match(/^\s*(?:tf|true[_\s/-]?false|t\/f)\s*[:.\)\-]\s*(.+)$/i);
+  const tfHead = stripped.match(/^\s*(?:tf|true[_\s/-]?false|t\/f)\s*[:.\)\-]\s*([\s\S]+)$/i);
   if (tfHead) {
-    const tfQuestion = norm(
-      tfHead[1] +
-        " " +
-        lines
-          .slice(1)
-          .filter(
-            (l) =>
-              !/^\s*(?:answer|ans|correct|explanation|explain|solution|reason|a|b)\s*[:.\)\-]/i.test(
-                l,
-              ),
-          )
-          .join(" "),
-    );
-    let tfAnswer: string | null = null;
-    let tfExp = "";
-    for (const line of lines.slice(1)) {
-      const ans = line.match(/^\s*(?:answer|ans|correct(?:\s+answer)?)\s*[:.\-)]\s*(.+)$/i);
-      const exp = line.match(/^\s*(?:explanation|explain|solution|reason)\s*[:.\-)]\s*(.*)$/i);
-      if (ans) tfAnswer = ans[1].trim();
-      else if (exp) tfExp = exp[1].trim();
-    }
-    if (!tfAnswer) return { mcq: null, reason: "True/False missing answer" };
-    const a = tfAnswer.toLowerCase().replace(/[^a-z]/g, "");
+    const body = tfHead[1];
+    const ansM = body.match(/(?:^|\n)\s*(?:answer|ans|correct(?:\s+answer)?|correct\s+option)\s*[:.\-)]\s*([^\n]+)/i);
+    const expM = body.match(/(?:^|\n)\s*(?:explanation|explain|solution|reason)\s*[:.\-)]\s*([\s\S]*)$/i);
+    if (!ansM) return { mcq: null, reason: "True/False missing answer" };
+    const cuts = [ansM.index, expM?.index].filter((x): x is number => typeof x === "number");
+    const tfQuestion = norm(body.slice(0, cuts.length ? Math.min(...cuts) : body.length));
+    const a = ansM[1].toLowerCase().replace(/[^a-z]/g, "");
     const correct: "A" | "B" =
       a === "true" || a === "t" || a === "a"
         ? "A"
@@ -90,7 +88,7 @@ function parseBlock(raw: string): { mcq: ParsedMcq | null; reason?: string } {
           ? "B"
           : "A";
     if (!["true", "t", "a", "false", "f", "b"].includes(a))
-      return { mcq: null, reason: `Could not resolve True/False answer "${tfAnswer}"` };
+      return { mcq: null, reason: `Could not resolve True/False answer "${ansM[1].trim()}"` };
     return {
       mcq: {
         question: tfQuestion.slice(0, 4000),
@@ -100,64 +98,61 @@ function parseBlock(raw: string): { mcq: ParsedMcq | null; reason?: string } {
         option_c: "",
         option_d: "",
         correct_option: correct,
-        explanation: norm(tfExp).slice(0, 4000),
+        explanation: norm(expM?.[1] ?? "").slice(0, 4000),
       },
     };
   }
 
-  if (lines.length < 5) return { mcq: null, reason: "Too few lines for an MCQ" };
-
-  const opts: Record<"A" | "B" | "C" | "D", string | null> = { A: null, B: null, C: null, D: null };
-  let answer: string | null = null;
-  let explanation = "";
-  const qParts: string[] = [];
-  let phase: "question" | "options" | "tail" = "question";
-
-  for (const line of lines) {
-    const optMatch = line.match(/^\s*[(\[]?\s*([A-Da-d])\s*[)\].:\-]\s+(.*)$/);
-    const ansMatch = line.match(/^\s*(?:answer|ans|correct(?:\s+answer)?)\s*[:.\-)]\s*(.+)$/i);
-    const expMatch = line.match(/^\s*(?:explanation|explain|solution|reason)\s*[:.\-)]\s*(.*)$/i);
-    const qMatch =
-      line.match(/^\s*(?:q|question)\s*[:.)\-]\s*(.+)$/i) || line.match(/^\s*\d+\s*[.)]\s*(.+)$/);
-
-    if (ansMatch) {
-      answer = ansMatch[1].trim();
-      phase = "tail";
-      continue;
-    }
-    if (expMatch) {
-      explanation = expMatch[1].trim();
-      phase = "tail";
-      continue;
-    }
-    if (optMatch) {
-      const k = optMatch[1].toUpperCase() as "A" | "B" | "C" | "D";
-      opts[k] = norm(optMatch[2]);
-      phase = "options";
-      continue;
-    }
-    if (qMatch && phase === "question" && qParts.length === 0) {
-      qParts.push(qMatch[1]);
-      continue;
-    }
-    if (phase === "question") qParts.push(line);
-    else if (phase === "tail" && explanation) explanation += " " + line;
+  const optRe = /(^|\n)[ \t]*\(?([A-Da-d])\)?[ \t]*[).:\-][ \t]*/g;
+  const markers: { letter: "A" | "B" | "C" | "D"; index: number; matchLen: number }[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = optRe.exec(stripped)) !== null) {
+    markers.push({
+      letter: match[2].toUpperCase() as "A" | "B" | "C" | "D",
+      index: match.index + match[1].length,
+      matchLen: match[0].length - match[1].length,
+    });
   }
 
-  const question = norm(qParts.join(" "));
-  if (!question) return { mcq: null, reason: "Missing question text" };
-  if (!opts.A || !opts.B || !opts.C || !opts.D) return { mcq: null, reason: "Need 4 options A–D" };
-  if (!answer) return { mcq: null, reason: "Missing answer" };
+  const firstOf = (letter: "A" | "B" | "C" | "D") => markers.find((m) => m.letter === letter);
+  const mA = firstOf("A");
+  const mB = firstOf("B");
+  const mC = firstOf("C");
+  const mD = firstOf("D");
+  if (!mA || !mB || !mC || !mD || !(mA.index < mB.index && mB.index < mC.index && mC.index < mD.index)) {
+    return { mcq: null, reason: "Need 4 options A–D" };
+  }
 
-  // Resolve answer → letter
+  const question = norm(stripped.slice(0, mA.index));
+  if (!question) return { mcq: null, reason: "Missing question text" };
+
+  const afterD = stripped.slice(mD.index + mD.matchLen);
+  const ansRe = /(?:^|\n)?\s*(?:answer|ans|correct(?:\s+answer)?|correct\s+option)\s*[:.\-)]?\s*(.+?)(?=\n\s*(?:explanation|explain|solution|reason)\s*[:.\-)]|$)/i;
+  const expRe = /(?:^|\n)\s*(?:explanation|explain|solution|reason)\s*[:.\-)]\s*([\s\S]*)$/i;
+  const ansMatch = ansRe.exec(afterD);
+  const expMatch = expRe.exec(afterD);
+  if (!ansMatch) return { mcq: null, reason: "Missing answer" };
+
+  const cuts = [ansMatch.index, expMatch?.index].filter((x): x is number => typeof x === "number");
+  const optionD = afterD.slice(0, cuts.length ? Math.min(...cuts) : afterD.length);
+  const between = (a: typeof mA, b: typeof mA) => stripped.slice(a.index + a.matchLen, b.index);
+  const opts = {
+    A: norm(between(mA, mB)),
+    B: norm(between(mB, mC)),
+    C: norm(between(mC, mD)),
+    D: norm(optionD),
+  };
+  if (!opts.A || !opts.B || !opts.C || !opts.D) return { mcq: null, reason: "Need 4 options A–D" };
+
   let correct: "A" | "B" | "C" | "D" | null = null;
-  const letter = answer.trim().match(/^[(\[]?([A-Da-d])[)\].:]?$/);
+  const answer = norm(ansMatch[1]);
+  const letter = answer.match(/^[(\[]?([A-Da-d])[)\].:]?$/);
   if (letter) {
     correct = letter[1].toUpperCase() as "A" | "B" | "C" | "D";
   } else {
-    const a = norm(answer).toLowerCase();
+    const a = answer.toLowerCase();
     for (const k of ["A", "B", "C", "D"] as const) {
-      if (opts[k] && norm(opts[k]!).toLowerCase() === a) {
+      if (opts[k].toLowerCase() === a) {
         correct = k;
         break;
       }
@@ -174,7 +169,7 @@ function parseBlock(raw: string): { mcq: ParsedMcq | null; reason?: string } {
       option_c: opts.C.slice(0, 1000),
       option_d: opts.D.slice(0, 1000),
       correct_option: correct,
-      explanation: norm(explanation).slice(0, 4000),
+      explanation: norm(expMatch?.[1] ?? "").slice(0, 4000),
     },
   };
 }

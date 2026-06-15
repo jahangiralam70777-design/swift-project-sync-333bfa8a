@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { assertPermission } from "@/lib/admin-permissions";
+import { mcqBulkImportItemSchema } from "@/lib/mcq-bulk-schema";
 
 const levelCode = z.string().trim().min(1).max(40);
 const statusEnum = z.enum(["draft", "published", "archived"]);
@@ -1199,16 +1200,7 @@ export const adminMockActivity = createServerFn({ method: "POST" })
 // Inserts MCQs into the bank under a chapter, then creates a mock test
 // referencing those MCQs. Mirrors MCQ Practice bulk upload, but produces a
 // mock test as the final artefact.
-const bulkMockItem = z.object({
-  question: z.string().trim().min(3).max(4000),
-  question_type: z.enum(["mcq", "true_false"]).default("mcq"),
-  option_a: z.string().trim().min(1).max(1000),
-  option_b: z.string().trim().min(1).max(1000),
-  option_c: z.string().trim().max(1000).nullable().optional(),
-  option_d: z.string().trim().max(1000).nullable().optional(),
-  correct_option: z.enum(["A", "B", "C", "D"]),
-  explanation: z.string().trim().max(4000).nullable().optional(),
-});
+const bulkMockItem = mcqBulkImportItemSchema;
 
 const bulkMockInput = z.object({
   chapter_id: z.string().uuid().nullable().optional(),
@@ -1224,7 +1216,7 @@ const bulkMockInput = z.object({
   randomize_options: z.boolean().default(false),
   negative_marking: z.number().min(0).max(5).default(0),
   passing_marks: z.number().int().min(0).max(1000).default(0),
-  items: z.array(bulkMockItem).min(1).max(200),
+  items: z.array(bulkMockItem).min(1).max(500),
   // For chunked uploads: when provided, append items to an existing mock instead
   // of creating a new one. Lets the client stream large imports in batches.
   append_to_quiz_id: z.string().uuid().nullable().optional(),
