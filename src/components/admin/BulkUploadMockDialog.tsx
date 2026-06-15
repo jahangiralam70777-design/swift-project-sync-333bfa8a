@@ -277,6 +277,7 @@ export function BulkUploadMockDialog({
               <SelectValue placeholder={subjectId ? "Chapter" : "Pick a subject first"} />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="__all__">All Chapters (subject-wide)</SelectItem>
               {chapters.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
                   {c.name}
@@ -284,6 +285,7 @@ export function BulkUploadMockDialog({
               ))}
             </SelectContent>
           </Select>
+
         </div>
 
         {/* Mock meta */}
