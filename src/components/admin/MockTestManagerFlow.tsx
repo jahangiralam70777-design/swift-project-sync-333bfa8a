@@ -875,23 +875,44 @@ export function MockTestManagerFlow() {
         )}
 
         {qgTab === "import" && (
-          <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-dashed border-white/10 bg-background/30 p-6">
-            <div>
-              <p className="font-semibold">Import an existing mock test</p>
-              <p className="text-xs text-muted-foreground">
-                Bring questions from another mock. Pick a source to duplicate from your library.
-              </p>
+          <div className="mt-4 space-y-3">
+            <div className="rounded-2xl border border-dashed border-white/10 bg-background/30 p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold">Bulk Upload Mock Test</p>
+                  <p className="text-xs text-muted-foreground">
+                    Upload a .txt / .md / .pdf / .docx file or paste raw text. We auto-parse MCQ
+                    blocks, detect duplicates, let you preview &amp; edit, then create the mock
+                    test in one click — same workflow as MCQ Practice Bulk Upload.
+                  </p>
+                </div>
+                <Button
+                  onClick={() => setShowBulkUpload(true)}
+                  className="bg-cta-gradient rounded-xl text-white shadow-glow"
+                >
+                  <Upload className="h-4 w-4" /> Open Bulk Upload
+                </Button>
+              </div>
             </div>
-            <Button
-              onClick={() => {
-                const first = rows[0];
-                if (!first) return toast.error("No mock tests to import from yet.");
-                dupMut.mutate(first.id);
-              }}
-              className="bg-cta-gradient rounded-xl text-white shadow-glow"
-            >
-              <Upload className="h-4 w-4" /> Duplicate Most Recent
-            </Button>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-background/30 p-4">
+              <div>
+                <p className="text-sm font-semibold">Or duplicate an existing mock</p>
+                <p className="text-xs text-muted-foreground">
+                  Copy the most recent mock from your library and edit it as a starting point.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const first = rows[0];
+                  if (!first) return toast.error("No mock tests to import from yet.");
+                  dupMut.mutate(first.id);
+                }}
+                className="rounded-xl"
+              >
+                <Copy className="h-4 w-4" /> Duplicate Most Recent
+              </Button>
+            </div>
           </div>
         )}
       </div>
